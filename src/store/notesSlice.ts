@@ -2,8 +2,8 @@ import {createAsyncThunk, createSlice} from '@reduxjs/toolkit';
 import {RootState} from './store';
 import EncryptedStorage from 'react-native-encrypted-storage';
 import {pickFile, readFile} from '@dr.pogodin/react-native-fs';
-import { Pipeline } from '@xenova/transformers';
-
+import { FeatureExtractionPipeline, pipeline } from '@xenova/transformers';
+import { QueryResult, Vector, checkIndex, clearIndex, populateIndex, query } from './Network';
 
 
 
@@ -17,7 +17,7 @@ import { Pipeline } from '@xenova/transformers';
 
 
 export interface NotesState {
-  ragDB?: any;
+  databaseReady: boolean;
   status: 'idle' | 'loading';
   answer: string;
   mindset: string;
@@ -25,7 +25,7 @@ export interface NotesState {
 }
 
 const initialState: NotesState = {
-  ragDB: undefined,
+  databaseReady: false,
   status: 'idle',
   answer: '',
   mindset: '',
@@ -62,7 +62,7 @@ export const fetchAnswer = createAsyncThunk(
   'notes/fetchAnswer',
   async (question: string, {dispatch, getState}) => {
     const state:RootState = getState() as RootState
-    return await askAI(question, state.notes.ragDB);
+    return await askAI(question, state.notes.databaseReady);
   }
 );
 
@@ -70,7 +70,7 @@ export const fetchMindset = createAsyncThunk(
   'notes/fetchMindset',
   async ({}, {dispatch, getState}) => {
     const state:RootState = getState() as RootState
-    return await askAI("Self_Reflection - What mindset can I take on to help myself improve today? What should I remember; how should I act?", state.notes.ragDB);
+    return await askAI("Self_Reflection - What mindset can I take on to help myself improve today? What should I remember; how should I act?", state.notes.databaseReady);
   }
 );
 
@@ -78,21 +78,20 @@ export const fetchTask = createAsyncThunk(
   'notes/fetchTask',
   async ({}, {dispatch, getState}) => {
     const state:RootState = getState() as RootState
-    return await askAI("Projects - What task should I try to take on today? What's something small I can try to find time for that can help build towards a bigger project, improve my life, or improve the world?", state.notes.ragDB);
+    return await askAI("Projects - What task should I try to take on today? What's something small I can try to find time for that can help build towards a bigger project, improve my life, or improve the world?", state.notes.databaseReady);
   }
 );
 
 // TODO hook up to actual LLM
 // helper function for all of our fetches to the AI
-export const askAI = async (question:string, ragDB?:any):Promise<string> => {
-  if (!ragDB) return 'No database';
-  const similarNotes:string[] = await ragDB.similaritySearch(question, 10);
-  return similarNotes.map(note => note).join('\n');
-  const response = await fetch(
-    `https://simple-insight-api.herokuapp.com/answer?question=${question}&token=12312`,
+export const askAI = async (question:string, databaseReady:boolean):Promise<string> => {
+  if (!databaseReady || !pipe) return 'No database';
+  const similarNotes:QueryResult[] = await query(
+    (await embed(question)).values,
+    50,
   );
-  const json = await response.json();
-  return json.answer;
+  return similarNotes.map(note => note.metadata?.text).join('\n');
+  // TODO pass these queried notes to LLM and ask it the question
 }
 
 export const uploadNotes = createAsyncThunk(
@@ -110,7 +109,7 @@ export const uploadNotes = createAsyncThunk(
       JSON.stringify(notes),
     );
     // parse notes into a RAG db
-    return await setupRAG(notes);
+    return await setupRAG(notes, true);
   },
 )
 
@@ -124,8 +123,7 @@ export const loadNotes = createAsyncThunk(
     // if they exist, set them up in a RAG db
     if (fileContent) {
       const notes = JSON.parse(fileContent);
-      await setupRAG(notes);
-      return notes;
+      return await setupRAG(notes, false);
     }
   }
 )
@@ -157,11 +155,68 @@ const parseNotes = (rawJson: string): string[] => {
   return allNoteStrings;
 };
 
+
+// https://github.com/pinecone-io/semantic-search-example
+// looks like i can connect to the hosted index here https://app.pinecone.io/organizations/-NSV2H13QbABOEJNJ6-o/projects/us-west1-gcp:3c78ac3/indexes/test/browser
+// using this api and its "host" location https://docs.pinecone.io/reference/upsert
+// going to need to:
+// create index if it doesnt exist
+// if we're uploading new notes, we need to delete all entries and reupload 
+// if we're just loading, then we need to verify that that index is properly populated
+// then we can query it
+
+let pipe:FeatureExtractionPipeline;
+
+type TextMetadata = {
+  text: string
+}
+
 // TODO langchain/hugging face isnt actually supported by React Native yet :/
 // replace with pinecone or openai or something else
 // helper function to setup RAG from a list of notes
-const setupRAG = async (notes:string[]):Promise<any> => {
-  
+const setupRAG = async (notes:string[], newNotes: boolean):Promise<boolean> => {
+  // setup pipeline for embeddings
+  if (!pipe) pipe = await pipeline('embeddings', 'Xenova/all-MiniLM-L6-v2');
+  let ready = false
+  // if we're not uploading new notes, check to see if our existing index is good 
+  if (!newNotes) ready = await checkIndex();
+  if (ready) return true;
+  // if we're uploading new notes or our index is bad, clear it and reupload
+  await clearIndex();
+  return await createAndUpsertVectors(notes);
+};
+
+// Embed a single string
+const embed = async (text: string): Promise<Vector> => {
+  const result = pipe && (await pipe(text));
+  return {
+    metadata: {
+      text,
+    },
+    values: Array.from(result.data),
+  };
+}
+
+// Batch an array of strings and embed + upsert each batch
+const createAndUpsertVectors = async (
+  texts: string[]
+) => {
+  const batches = sliceIntoChunks<string>(texts, 10);
+  for (const batch of batches) {
+    const embeddings = await Promise.all(
+      batch.map((text) => embed(text))
+    );
+    const failed = await populateIndex(embeddings);
+    if (!failed) return false
+  }
+  return true
+}
+
+// breaks up an array into an array of arrays, where each subarray has at most chunkSize elements
+const sliceIntoChunks = <T>(arr: T[], chunkSize: number) => {
+  return Array.from({ length: Math.ceil(arr.length / chunkSize) }, (_, i) =>
+    arr.slice(i * chunkSize, (i + 1) * chunkSize)
+  );
 };
 
 
@@ -229,7 +284,8 @@ export const notesSlice = createSlice({
       })
       .addCase(uploadNotes.fulfilled, (state, action) => {
         state.status = 'idle';
-        state.ragDB = action.payload;
+        state.databaseReady = !!action.payload;
+        if (!state.databaseReady) state.answer = "Error: Notes failed to upload, please check your internet connection and json file, or restart the app.";
       })
       .addCase(uploadNotes.rejected, (state, action) => {
         state.status = 'idle';
@@ -241,7 +297,8 @@ export const notesSlice = createSlice({
       })
       .addCase(loadNotes.fulfilled, (state, action) => {
         state.status = 'idle';
-        state.ragDB = action.payload;
+        state.databaseReady = !!action.payload;
+        if (!state.databaseReady) state.answer = "Error: Notes failed to upload, please check your internet connection and json file, or restart the app";
       })
       .addCase(loadNotes.rejected, (state, action) => {
         state.status = 'idle';
