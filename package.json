@@ -12,14 +12,14 @@
   "dependencies": {
     "@dr.pogodin/react-native-fs": "^2.22.1",
     "@reduxjs/toolkit": "^2.1.0",
-    "@xenova/transformers": "^2.14.2",
     "react": "18.2.0",
     "react-native": "0.73.2",
     "react-native-encrypted-storage": "^4.0.3",
     "react-native-paper": "^5.12.3",
     "react-native-safe-area-context": "^4.8.2",
+    "react-native-uuid": "^2.0.1",
     "react-native-vector-icons": "^10.0.3",
-    "react-redux": "^9.1.0",
+    "react-redux": "^9.1.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

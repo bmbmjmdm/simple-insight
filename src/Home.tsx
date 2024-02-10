@@ -1,5 +1,5 @@
 import {ScrollView, View} from 'react-native';
-import {TextInput, Button, useTheme, Text, ActivityIndicator} from 'react-native-paper';
+import {TextInput, Button, useTheme, Text, ActivityIndicator, Divider} from 'react-native-paper';
 import React, {useEffect} from 'react';
 import { useAppDispatch, useAppSelector } from './store/hooks';
 import { fetchAnswer, fetchMindset, fetchTask, loadNotes, selectAnswer, selectHasNotes, selectIsLoading, selectMindset, selectTask, uploadNotes } from './store/notesSlice';
@@ -22,9 +22,9 @@ const Home = () => {
     dispatch(uploadNotes());
   }).current;
 
-  const askAi = React.useRef(() => {
+  const askAi = () => {
     dispatch(fetchAnswer(question));
-  }).current;
+  };
 
   useEffect(() => {
     dispatch(loadNotes())
@@ -32,17 +32,18 @@ const Home = () => {
 
   useEffect(() => {
     if (hasNotes) {
-      dispatch(fetchMindset());
-      dispatch(fetchTask());
+      // TODO add a button to fetch these so it doesnt fetch every single time the app is opened, couldbe costly
+      //dispatch(fetchMindset());
+      //dispatch(fetchTask());
     }
   }, [hasNotes]);
 
   return (
-    <View style={{margin: 15}}>
+    <View style={{margin: 15, flex: 1}}>
       {isLoading ? <ActivityIndicator animating={true} style={{position: "absolute", right: 0, top: 0}} /> : null}
       {isLoading ? <ActivityIndicator animating={true} style={{position: "absolute", right: 0, bottom: 0}} /> : null}
 
-      <View style={{height: 100}}>
+      <View style={{height: 100, marginBottom: 10}}>
         <ScrollView>
           <Text
             variant="bodyLarge"
@@ -52,7 +53,8 @@ const Home = () => {
           </Text>
         </ScrollView>
       </View>
-      <View style={{height: 100}}>
+      <Divider />
+      <View style={{height: 100, marginTop: 10}}>
         <ScrollView>
           <Text
             variant="bodyLarge"
@@ -111,7 +113,7 @@ const Home = () => {
 
       <VerticalSpace />
 
-      <ScrollView>
+      <ScrollView style={{flex: 1}}>
         <Text
           variant="titleLarge"
           style={{color: theme.colors.inverseOnSurface}}

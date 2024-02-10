@@ -1,0 +1,4 @@
+export const MindsetPrompt = "Self_Reflection - What mindset can I take on to help myself improve today? What should I remember; how should I act?"
+export const TaskPrompt = "Projects - TODO - What task should I try to take on today? What's something small I can try to find time for that can help build towards a bigger project, improve my life, or improve the world?"
+export const ChatPrompt = "Using the notes below and your own reasoning, answer the user's question to the best of your ability. Try to be as specific to the user's notes as possible, and not give a generalized answer."
+export const NotesPrompt = (notes:string) => `====$$$NOTES$$$====\n\n${notes}===$$$END NOTES$$$===`;
