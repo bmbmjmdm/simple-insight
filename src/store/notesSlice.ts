@@ -4,8 +4,9 @@ import EncryptedStorage from 'react-native-encrypted-storage';
 import {pickFile, readFile} from '@dr.pogodin/react-native-fs';
 import { QueryResult, chatCompletion, checkIndex, clearIndex, populateIndex, query } from './Network';
 import uuid from 'react-native-uuid';
-import { MindsetPrompt, TaskPrompt } from './Prompts';
+import { MindsetPrompt, RandomNote, TaskPrompt } from './Prompts';
 import { SIMILAR_LINES_TO_QUESTION, SIMILAR_LINES_TO_TITLES } from './Parameters';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 
@@ -18,21 +19,21 @@ import { SIMILAR_LINES_TO_QUESTION, SIMILAR_LINES_TO_TITLES } from './Parameters
 
 
 export interface NotesState {
+  usePrivateNotes: boolean;
   databaseReady: boolean;
-  noteMap: Record<string, string>;
+  noteMap: Record<string, SimpleNoteNote>;
   status: 'idle' | 'loading';
   answer: string;
-  mindset: string;
-  task: string;
+  funfact: string;
 }
 
 const initialState: NotesState = {
   databaseReady: false,
+  usePrivateNotes: true,
   noteMap: {},
   status: 'idle',
   answer: '',
-  mindset: '',
-  task: '',
+  funfact: '',
 };
 
 type SimpleNoteExport = {
@@ -71,44 +72,73 @@ export const fetchAnswer = createAsyncThunk(
   'notes/fetchAnswer',
   async (question: string, {dispatch, getState}) => {
     const state:RootState = getState() as RootState
-    return await askAI(question, state.notes.databaseReady, state.notes.noteMap);
-  }
-);
-
-export const fetchMindset = createAsyncThunk(
-  'notes/fetchMindset',
-  async (props, {dispatch, getState}) => {
-    const state:RootState = getState() as RootState
     return await askAI(
-      MindsetPrompt,
+      question,
       state.notes.databaseReady,
-      state.notes.noteMap
+      state.notes.noteMap,
+      !state.notes.usePrivateNotes
     );
   }
 );
 
-export const fetchTask = createAsyncThunk(
+export const fetchFunfact = createAsyncThunk(
   'notes/fetchTask',
-  async (props, {dispatch, getState}) => {
+  async (forceFetch:boolean, {dispatch, getState}) => {
+    // by default we don't want to fetch a new fun fact if we already have one that's less than 24 hours old
+    if (!forceFetch) {
+      const lastFunFactFetchedAt = await AsyncStorage.getItem('lastFunfactTime') || "0"
+      const useOldFunFact = Date.now() - JSON.parse(lastFunFactFetchedAt) < 1000 * 60 * 60 * 24
+      const oldFunFact = await AsyncStorage.getItem('funfact');
+      if (useOldFunFact && oldFunFact) return oldFunFact; 
+    }
+    // otherwise, choose a random prompt and ask the AI to answer it using our notes
     const state:RootState = getState() as RootState
-    return await askAI(
-      TaskPrompt,
+    const random = Math.random()
+    const randomPrompt = random > 0.40 ? MindsetPrompt : random > 0.80 ? TaskPrompt : RandomNote;
+    const newFunFact = await askAI(
+      randomPrompt,
       state.notes.databaseReady,
-      state.notes.noteMap
+      state.notes.noteMap,
+      !state.notes.usePrivateNotes
     );
+    // if we got a new fun fact, store it and the time we got it
+    if (newFunFact) {
+      await AsyncStorage.setItem('funfact', newFunFact);
+      await AsyncStorage.setItem('lastFunfactTime', JSON.stringify(Date.now()));
+    }
+    return newFunFact;
   }
 );
 
 // helper function for all of our fetches to the AI
 // this implements a RAG model to find notes similar to the user's question to include those when asking the ai
-export const askAI = async (question:string, databaseReady:boolean, noteMap: Record<string,string>):Promise<string> => {
+export const askAI = async (question:string, databaseReady:boolean, noteMap: Record<string,SimpleNoteNote>, filterPrivate: boolean):Promise<string> => {
   if (!databaseReady) return 'No database';
+  // special case where we want to ask the AI about a specific random note
+  if (question === RandomNote) {
+    const noteKeys = Object.keys(noteMap);
+    const getRandomNote = () => {
+      return noteMap[noteKeys[Math.floor(Math.random() * noteKeys.length)]]
+    }
+    let randomNote: SimpleNoteNote = getRandomNote();
+    // we dont want old notes for this
+    while (randomNote?.tags?.includes("old")) {
+      randomNote = getRandomNote();
+    }
+    const aiResponse = await chatCompletion(question, randomNote.content)
+    return `${aiResponse}\n\nOriginal Note:\n\n${randomNote.content}`;
+  }
+
   // find X lines similar to our question
   const similarLines:QueryResult[] = await query(question, SIMILAR_LINES_TO_QUESTION);
   // map those lines to notes
   let similarNotes:Set<string> = new Set();
   for (const line of similarLines) {
-    similarNotes.add(noteMap[line.metadata.noteId]);
+    const fullNote = noteMap[line.metadata.noteId]
+    if (filterPrivate) {
+      if (fullNote.tags?.includes("private")) continue;
+    }
+    similarNotes.add(fullNote.content);
   }
 
   // for each unique note, query Y similar lines based on its title
@@ -122,7 +152,11 @@ export const askAI = async (question:string, databaseReady:boolean, noteMap: Rec
         const newLines:QueryResult[] = await query(title, SIMILAR_LINES_TO_TITLES + 1);
         // map those lines to notes and add to our set
         for (const line of newLines) {
-          similarNotes.add(noteMap[line.metadata.noteId]);
+          const fullNote = noteMap[line.metadata.noteId]
+          if (filterPrivate) {
+            if (fullNote.tags?.includes("private")) continue;
+          }
+          similarNotes.add(fullNote.content);
         }
       }
       similarSimilarNotesPromises.push(asyncFun());
@@ -188,20 +222,24 @@ export const loadNotes = createAsyncThunk(
 // helper function to parse the notes from the json
 // we want to parse the note into a map of id => note
 // and a list of all lines in all notes
-const parseNotes = (rawJson: string): {lines: NoteLine[], map: Record<string,string>} => {
+const parseNotes = (rawJson: string): {lines: NoteLine[], map: Record<string,SimpleNoteNote>} => {
   const jsonParsed: SimpleNoteExport = JSON.parse(rawJson);
+  for (const note of jsonParsed.trashedNotes) {
+    note.tags = note.tags || [];
+    note.tags.push('old');
+  }
   // we now have a list of all notes in their proper SimpleNoteNote form
   const allNoteObjects = [
     ...jsonParsed.activeNotes,
     ...jsonParsed.trashedNotes,
   ];
   const allNoteStrings: NoteLine[] = [];
-  const allNoteMaps: Record<string, string> = {};
+  const allNoteMaps: Record<string, SimpleNoteNote> = {};
   // go through every note
   for (const note of allNoteObjects) {
     const noteContent = note.content.trim();
     // store the full note in our map based on id
-    allNoteMaps[note.id] = noteContent;
+    if (noteContent) allNoteMaps[note.id] = note;
     // split it into lines and extract the title & tags
     const lines = noteContent.split('\n\n'); // TODO is this a good split point?
     let firstLine = lines[0].trim();
@@ -270,70 +308,74 @@ const setupRAG = async (notes:NoteLine[], newNotes: boolean):Promise<boolean> =>
 export const notesSlice = createSlice({
   name: 'notes',
   initialState,
-  reducers: {},
+  reducers: {
+    toggleUsePrivateNotes: state => {
+      state.usePrivateNotes = !state.usePrivateNotes;
+    }
+  },
   extraReducers: builder => {
     builder
     // fetch answer
       .addCase(fetchAnswer.pending, state => {
+        console.log("fetchAnswer pending")
         state.status = 'loading';
       })
       .addCase(fetchAnswer.fulfilled, (state, action) => {
+        console.log("fetchAnswer fulfilled")
         state.status = 'idle';
         state.answer = action.payload;
       })
       .addCase(fetchAnswer.rejected, (state, action) => {
+        console.log("fetchAnswer rejected")
         state.status = 'idle';
         state.answer = "Error: " + action.error.message;
       })
-    // fetch mindset
-      .addCase(fetchMindset.pending, state => {
+    // fetch funfact
+      .addCase(fetchFunfact.pending, state => {
+        console.log("fetchFunfact pending")
         state.status = 'loading';
       })
-      .addCase(fetchMindset.fulfilled, (state, action) => {
+      .addCase(fetchFunfact.fulfilled, (state, action) => {
+        console.log("fetchFunfact fulfilled")
         state.status = 'idle';
-        state.mindset = action.payload;
+        state.funfact = action.payload;
       })
-      .addCase(fetchMindset.rejected, (state, action) => {
+      .addCase(fetchFunfact.rejected, (state, action) => {
+        console.log("fetchFunfact rejected")
         state.status = 'idle';
-        state.mindset = "Error: " + action.error.message;
-      })
-    // fetch task
-      .addCase(fetchTask.pending, state => {
-        state.status = 'loading';
-      })
-      .addCase(fetchTask.fulfilled, (state, action) => {
-        state.status = 'idle';
-        state.task = action.payload;
-      })
-      .addCase(fetchTask.rejected, (state, action) => {
-        state.status = 'idle';
-        state.task = "Error: " + action.error.message;
+        state.funfact = "Error: " + action.error.message;
       })
     // upload notes
       .addCase(uploadNotes.pending, state => {
+        console.log("uploadNotes pending")
         state.status = 'loading';
       })
       .addCase(uploadNotes.fulfilled, (state, action) => {
+        console.log("uploadNotes fulfilled")
         state.status = 'idle';
         state.databaseReady = !!action.payload?.databaseReady;
         state.noteMap = action.payload?.noteMap || {};
         if (!state.databaseReady) state.answer = "Error: Notes failed to upload, please check your internet connection and json file, or restart the app.";
       })
       .addCase(uploadNotes.rejected, (state, action) => {
+        console.log("uploadNotes rejected")
         state.status = 'idle';
         state.answer = "Error Loading Notes: " + action.error.message;
       })
     // load notes
       .addCase(loadNotes.pending, state => {
+        console.log("loadNotes pending")
         state.status = 'loading';
       })
       .addCase(loadNotes.fulfilled, (state, action) => {
+        console.log("loadNotes fulfilled")
         state.status = 'idle';
         state.databaseReady = !!action.payload?.databaseReady;
         state.noteMap = action.payload?.noteMap || {};
         if (!state.databaseReady) state.answer = "Error: Notes failed to upload, please check your internet connection and json file, or restart the app";
       })
       .addCase(loadNotes.rejected, (state, action) => {
+        console.log("loadNotes rejected")
         state.status = 'idle';
         state.answer = "Error Loading Notes: " + action.error.message;
       })
@@ -341,14 +383,14 @@ export const notesSlice = createSlice({
 });
 
 // We export our "normal" reducers via actions generated by the slice
-export const {} = notesSlice.actions;
+export const { toggleUsePrivateNotes } = notesSlice.actions;
 
 // We export parts of our state via selectors
 export const selectHasNotes = (state: RootState) => state.notes.databaseReady;
 export const selectAnswer = (state: RootState) => state.notes.answer;
-export const selectMindset = (state: RootState) => state.notes.mindset;
-export const selectTask = (state: RootState) => state.notes.task;
+export const selectFunfact = (state: RootState) => state.notes.funfact;
 export const selectIsLoading = (state: RootState) => state.notes.status === 'loading';
+export const selectIsUsingPrivateNotes = (state: RootState) => state.notes.usePrivateNotes;
 
 // this allows us to add the notes slice to our store
 export default notesSlice.reducer;

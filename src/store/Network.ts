@@ -7,7 +7,7 @@ import uuid from 'react-native-uuid';
 
 export const chatCompletion = async (question: string, notes: string): Promise<string> => {
   try {
-    console.log(notes.length);
+    console.log("Context length: " + (NotesPrompt(notes).length + question.length + ChatPrompt.length)/3);
     const result = await fetch(`https://api.openai.com/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -44,7 +44,7 @@ type PineconeFetch = {
   secondTry?: boolean; 
 }
 
-// helper function that makes a fetch call to our pinecone server, returns the json response or null if it fails
+// helper function that makes a fetch call to our pinecone server, returns the json response or throws error if it fails
 // has a built-in retry
 // https://docs.pinecone.io/reference/upsert
 const pineconeFetch = async (props: PineconeFetch): Promise<any> => {
@@ -66,7 +66,7 @@ const pineconeFetch = async (props: PineconeFetch): Promise<any> => {
   catch (e) {
     console.log(`${endpoint} failed`)
     console.log(e)
-    if (secondTry) return null
+    if (secondTry) throw e
     else return await pineconeFetch({endpoint, body, secondTry: true})
   }
 }
@@ -112,28 +112,24 @@ export type Vector = {
 export const populateIndex = async (
   lines: NoteLine[]
 ) => {
-  const batches = sliceIntoChunks<NoteLine>(lines, 10);
+  const batches = sliceIntoChunks<NoteLine>(lines, 100);
   for (const batch of batches) {
-    const embeddings = await Promise.all(
-      batch.map((line) => embed(line))
-    );
-    const passed = await upsertVectors(embeddings);
-    if (!passed) return false
+    const embeddings = await embed(batch);
+    await upsertVectors(embeddings);
   }
   return true
 }
 
-// calls our index and deletes all vectors, returns true if successful
-export const upsertVectors = async (vectors: Vector[]): Promise<boolean> => {
+// calls our index and deletes all vectors
+export const upsertVectors = async (vectors: Vector[]): Promise<void> => {
   try {
     await pineconeFetch({
       endpoint: "vectors/upsert",
       body: { vectors }
     })
-    return true
   }
   catch (e) {
-    return false
+    throw e
   }
 }
 
@@ -149,11 +145,11 @@ export type QueryResult = {
 // calls our index with a query vector and returns the topK results
 // can take more options such as namespace, filter, etc as seen here https://docs.pinecone.io/reference/query
 export const query = async (queryString: string, topK: number): Promise<QueryResult[]> => {
-  const vector:number[] = (await embed({
+  const vector:number[] = (await embed([{
     text: queryString,
     noteId: uuid.v4() as string,
     lineId: uuid.v4() as string,
-  })).values
+  }]))[0].values
   try {
     const result = await pineconeFetch({
       endpoint: "query",
@@ -172,8 +168,8 @@ export const query = async (queryString: string, topK: number): Promise<QueryRes
 }
 
 
-// Embed a single string
-const embed = async (line: NoteLine, secondTry = false): Promise<Vector> => {
+// Embed an array of lines
+const embed = async (lines: NoteLine[], secondTry = false): Promise<Vector[]> => {
   try {
     const result = await fetch(`https://api.openai.com/v1/embeddings`, {
       method: 'POST',
@@ -183,26 +179,33 @@ const embed = async (line: NoteLine, secondTry = false): Promise<Vector> => {
         Authorization: `Bearer ${OpenAIKey}`
       },
       body: JSON.stringify({
-        input: line.text,
+        input: lines.map(line => line.text),
         model: EMBEDDING_MODEL,
       })
     })
     if (result.status !== 200) throw new Error(`Embedding failed with status: ${result.status}`)
     const json = await result.json()
-    return {
-      metadata: {
-        text: line.text,
-        noteId: line.noteId
-      },
-      values: json.data[0].embedding,
-      id: line.lineId
-    };
+    const embeddings = []
+    // go through the returned embeddings and turn them into vectors
+    for (let i = 0; i < lines.length; i++) {
+      // sanity check each embedding first
+      if (json.data[i].embedding.length !== 3072 || json.data[i].embedding.includes(NaN)) throw new Error(`Erroness embedding returned`)
+      embeddings.push({
+        metadata: {
+          text: lines[i].text,
+          noteId: lines[i].noteId
+        },
+        values: json.data[i].embedding,
+        id: lines[i].lineId
+      })
+    }
+    return embeddings;
   }
   catch (e) {
     console.log(`Embedding failed`)
     console.log(e)
     if (secondTry) throw e
-    else return await embed(line, true)
+    else return await embed(lines, true)
   }
 }
 

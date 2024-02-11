@@ -8,8 +8,39 @@ const theme = {
   ...DefaultTheme,
   colors: {
     ...DefaultTheme.colors,
-    //primary: 'tomato',
-    //secondary: 'yellow',
+    inverseSurface: "white",
+    surfaceVariant: "#f0f0f022",
+
+
+    surfaceDisabled: "#ffdaed33",
+    primary: "#ffdaedcc",
+    outline: "#ffdaedcc",
+
+
+    inverseOnSurface: "black",
+    onSurface: "white",
+    onSurfaceVariant: "white",
+    onPrimary: "black",
+    onSurfaceDisabled: "#00000033",
+
+
+
+    primaryContainer: "red",
+    secondaryContainer: "red",
+    tirtiaryContainer: "red",
+    background: "red",
+    backdrop: "red",
+    secondary: "red",
+    tirtiary: "red",
+    inversePrimary: "red",
+    inverseSecondary: "red",
+    inverseTirtiary: "red",
+    onPrimaryContainer: "red",
+    onSecondaryContainer: "red",
+    onTirtiaryContainer: "red",
+    onSecondary: "red",
+    onTirtiary: "red",
+    onBackground: "red",
   },
 };
 
