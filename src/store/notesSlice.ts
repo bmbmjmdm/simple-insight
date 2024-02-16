@@ -94,7 +94,8 @@ export const fetchFunfact = createAsyncThunk(
     // otherwise, choose a random prompt and ask the AI to answer it using our notes
     const state:RootState = getState() as RootState
     const random = Math.random()
-    const randomPrompt = random > 0.40 ? MindsetPrompt : random > 0.80 ? TaskPrompt : RandomNote;
+    console.log(random)
+    const randomPrompt = random > 0.80 ? MindsetPrompt : random > 0.50 ? TaskPrompt : RandomNote;
     const newFunFact = await askAI(
       randomPrompt,
       state.notes.databaseReady,

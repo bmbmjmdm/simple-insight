@@ -122,7 +122,7 @@ const Home = () => {
 
           <Space />
 
-          <View style={{flex: 1}}>
+          <View style={{flex: 1, justifyContent: "center"}}>
             <Button
               icon="file"
               mode="contained"

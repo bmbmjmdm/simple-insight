@@ -66,3 +66,10 @@ yarn-error.log
 /coverage
 
 src/secrets.ts
+src/assets/IMG_20211107_142534.jpg
+src/assets/IMG_20220910_175120.jpg
+src/assets/IMG_20230824_141159.jpg
+src/assets/IMG_20230823_170636.jpg
+src/assets/IMG_20230824_154840.jpg
+src/assets/P_20200827_192440_vHDR_Auto_HP.jpg
+android/app/src/main/assets/index.android.bundle
