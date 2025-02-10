@@ -10,6 +10,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3",
     "@dr.pogodin/react-native-fs": "^2.22.1",
     "@react-native-async-storage/async-storage": "^1.21.0",
     "@reduxjs/toolkit": "^2.1.0",

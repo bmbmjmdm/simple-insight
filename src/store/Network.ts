@@ -1,11 +1,16 @@
-import { OpenAIKey, PineconeKey, PineconeServer } from '../secrets'
-import { CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS, CHAT_MODEL, CHAT_TEMPERATURE, EMBEDDING_MODEL } from './Parameters';
+import { OpenAIKey, PineconeKey, PineconeServer, AnthropicKey } from '../secrets'
+import { CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS, CHAT_MODEL_OPENAI, CHAT_MODEL_ANTHROPIC, CHAT_TEMPERATURE, EMBEDDING_MODEL } from './Parameters';
 import { NotesPrompt, ChatPrompt } from './Prompts';
 import { NoteLine } from './notesSlice';
 import uuid from 'react-native-uuid';
+import Anthropic from '@anthropic-ai/sdk';
 
 
-export const chatCompletion = async (question: string, notes: string): Promise<string> => {
+export const chatCompletion = async (question:string, notes:string): Promise<string> => {
+  return await chatCompletionAnthropic(question, notes);
+}
+
+export const chatCompletionOpenAI = async (question: string, notes: string): Promise<string> => {
   try {
     console.log("Context length: " + (NotesPrompt(notes).length + question.length + ChatPrompt.length)/3);
     const result = await fetch(`https://api.openai.com/v1/chat/completions`, {
@@ -16,7 +21,7 @@ export const chatCompletion = async (question: string, notes: string): Promise<s
         Authorization: `Bearer ${OpenAIKey}`
       },
       body: JSON.stringify({
-        model: CHAT_MODEL, 
+        model: CHAT_MODEL_OPENAI, 
         messages: [
           { role: 'system', content: ChatPrompt },
           { role: 'system', content: NotesPrompt(notes) },
@@ -30,6 +35,48 @@ export const chatCompletion = async (question: string, notes: string): Promise<s
     if (result.status !== 200) throw new Error(`Status ${result.status}`)
     const json = await result.json()
     return json.choices[0].message.content
+  }
+  catch (e) {
+    console.log(`Chat failed`)
+    console.log(e)
+    return `Chat failed: ${e}`
+  }
+}
+
+
+const client = new Anthropic({
+  apiKey: AnthropicKey,
+});
+
+export const chatCompletionAnthropic = async (question: string, notes: string): Promise<string> => {
+  try {
+    const message = await client.messages.create({
+      model: CHAT_MODEL_ANTHROPIC,
+      max_tokens: CHAT_MAX_TOKENS,
+      temperature: CHAT_TEMPERATURE,
+      system: ChatPrompt,
+      messages: [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": NotesPrompt(notes)
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": question
+                }
+            ],
+        }
+      ],
+    });
+    return message.content[0].text
   }
   catch (e) {
     console.log(`Chat failed`)
